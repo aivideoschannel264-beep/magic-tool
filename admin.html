@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Magic Tool Admin</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:"Segoe UI",Roboto,Arial,sans-serif;color:#0f3b43;min-height:100vh;padding:14px;background:linear-gradient(135deg,#d8fbf6,#b6f0ee 40%,#bfe3fb) fixed}
+.wrap{max-width:900px;margin:0 auto;display:flex;flex-direction:column;gap:12px}
+.g{background:rgba(255,255,255,.5);border:1px solid rgba(255,255,255,.8);border-radius:18px;padding:14px;-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);box-shadow:0 8px 24px rgba(24,120,130,.15)}
+h1{font-size:1.4rem}h2{font-size:1.05rem;margin-bottom:8px}
+input,textarea{width:100%;padding:11px 12px;border:1.5px solid #fff;border-radius:12px;font:inherit;background:rgba(255,255,255,.85);color:inherit;margin-bottom:8px}
+button{font:inherit;border:0;border-radius:11px;padding:10px 13px;font-weight:700;color:#fff;background:linear-gradient(120deg,#2ec4b6,#3a86ff);cursor:pointer}
+button.s{background:#6b8f95}button.d{background:#c0392b}button.w{background:#d98a00}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.bar{display:flex;gap:8px;align-items:center;justify-content:space-between}
+.tabs{display:flex;gap:8px}.tabs button{flex:1;background:#6b8f95}.tabs button.on{background:linear-gradient(120deg,#2ec4b6,#3a86ff)}
+.k{background:rgba(255,255,255,.72);border-radius:14px;padding:12px;margin-bottom:10px}
+.k code{font-size:1.02rem;font-weight:700;letter-spacing:1px;word-break:break-all}
+.b{display:inline-block;padding:2px 9px;border-radius:99px;font-size:.78rem;font-weight:700;color:#fff;margin-left:6px}
+.b.active{background:#12805c}.b.inactive{background:#6b8f95}.b.revoked{background:#c0392b}.b.expired{background:#d98a00}
+.acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.m{font-size:.85rem;color:#3d6a72;margin-top:4px;word-break:break-word}
+#msg{font-size:.92rem;min-height:1.2em;font-weight:600}
+.hide{display:none!important}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="g bar"><h1>Magic Tool Admin</h1><button class="s hide" id="out" type="button">Log out</button></div>
+  <div id="msg" role="status"></div>
+
+  <form class="g" id="login">
+    <h2>Admin login</h2>
+    <input id="em" type="email" placeholder="Email" autocomplete="username" required>
+    <input id="pw" type="password" placeholder="Password" autocomplete="current-password" required>
+    <button type="submit">Log in</button>
+  </form>
+
+  <div id="panel" class="hide">
+    <div class="tabs g">
+      <button class="on" data-t="keys" type="button">Keys</button>
+      <button data-t="gen" type="button">Generate</button>
+      <button data-t="log" type="button">History</button>
+    </div>
+
+    <div class="g" id="t-keys">
+      <input id="q" placeholder="Search key, owner or contact">
+      <div id="list"></div>
+    </div>
+
+    <div class="g hide" id="t-gen">
+      <h2>Generate keys</h2>
+      <div class="row"><input id="gc" type="number" min="1" max="50" value="1" placeholder="How many (1-50)"><input id="ge" type="date" title="Expiry date (optional)"></div>
+      <div class="row"><input id="go" maxlength="100" placeholder="Owner name (optional)"><input id="gt" maxlength="100" placeholder="Owner contact (optional)"></div>
+      <textarea id="gn" maxlength="300" rows="2" placeholder="Note (optional)"></textarea>
+      <button id="gb" type="button">Generate</button>
+      <div id="newKeys" class="m"></div>
+    </div>
+
+    <div class="g hide" id="t-log">
+      <h2>Verification history (latest 200)</h2>
+      <div id="logs"></div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="config.js"></script>
+<script>
+const C = window.APP_CONFIG || {};
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const say = (t, bad) => { $("msg").textContent = t || ""; $("msg").style.color = bad ? "#c0392b" : "#12805c"; };
+if (!C.supabaseUrl || !C.supabaseAnonKey) { say("Set supabaseUrl and supabaseAnonKey in config.js first.", true); $("login").classList.add("hide"); }
+const sb = (C.supabaseUrl && C.supabaseAnonKey) ? supabase.createClient(C.supabaseUrl, C.supabaseAnonKey) : null;
+let all = [];
+
+function show(on){ $("login").classList.toggle("hide", on); $("panel").classList.toggle("hide", !on); $("out").classList.toggle("hide", !on); }
+
+async function start(){
+  const { data:{ session } } = await sb.auth.getSession();
+  if (!session) return show(false);
+  const { data: row, error } = await sb.from("admins").select("user_id").eq("user_id", session.user.id).maybeSingle();
+  if (error || !row) { await sb.auth.signOut(); show(false); return say("This account is not an admin.", true); }
+  show(true); say(""); await loadKeys();
+}
+
+$("login").addEventListener("submit", async e => {
+  e.preventDefault();
+  const { error } = await sb.auth.signInWithPassword({ email: $("em").value.trim(), password: $("pw").value });
+  $("pw").value = "";
+  if (error) return say("Login failed: " + error.message, true);
+  start();
+});
+$("out").addEventListener("click", async () => { await sb.auth.signOut(); all = []; say("Logged out."); show(false); });
+
+document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click", () => {
+  document.querySelectorAll(".tabs button").forEach(x => x.classList.toggle("on", x === b));
+  ["keys","gen","log"].forEach(t => $("t-" + t).classList.toggle("hide", t !== b.dataset.t));
+  if (b.dataset.t === "keys") loadKeys(); if (b.dataset.t === "log") loadLogs();
+}));
+
+const statusOf = l => (l.status === "active" && l.expires_at && new Date(l.expires_at) <= new Date()) ? "expired" : l.status;
+
+async function loadKeys(){
+  const { data, error } = await sb.from("licenses").select("*").order("created_at", { ascending:false }).limit(500);
+  if (error) return say("Could not load keys: " + error.message, true);
+  all = data; render();
+}
+function render(){
+  const q = $("q").value.trim().toLowerCase();
+  const rows = all.filter(l => !q || [l.license_key, l.owner_name, l.owner_contact, l.note].some(v => (v || "").toLowerCase().includes(q)));
+  $("list").innerHTML = rows.length ? rows.map(l => { const st = statusOf(l); return `
+    <div class="k" data-id="${esc(l.id)}">
+      <code>${esc(l.license_key)}</code><span class="b ${esc(st)}">${esc(st)}</span>
+      <div class="m">Owner: ${esc(l.owner_name || "-")} | Contact: ${esc(l.owner_contact || "-")}</div>
+      <div class="m">Created ${esc(l.created_at.slice(0,10))}${l.note ? " | " + esc(l.note) : ""}</div>
+      <div class="acts">
+        <input type="date" class="ex" style="width:auto;margin:0" value="${esc((l.expires_at || "").slice(0,10))}" title="Expiry date">
+        <button data-a="exp" type="button">Save expiry</button>
+        <button class="w" data-a="tog" type="button">${l.status === "active" ? "Deactivate" : "Activate"}</button>
+        <button class="s" data-a="own" type="button">Edit owner</button>
+        ${l.status !== "revoked" ? '<button class="d" data-a="rev" type="button">Revoke</button>' : ""}
+        <button class="d" data-a="del" type="button">Delete</button>
+      </div>
+    </div>`; }).join("") : '<div class="m">No keys found.</div>';
+}
+$("q").addEventListener("input", render);
+
+async function upd(id, patch){
+  const { error } = await sb.from("licenses").update(patch).eq("id", id);
+  if (error) return say("Update failed: " + error.message, true);
+  say("Saved."); loadKeys();
+}
+$("list").addEventListener("click", async e => {
+  const btn = e.target.closest("button[data-a]"); if (!btn) return;
+  const card = btn.closest(".k"), id = card.dataset.id, l = all.find(x => x.id === id), a = btn.dataset.a;
+  if (a === "tog") return upd(id, { status: l.status === "active" ? "inactive" : "active" });
+  if (a === "rev") { if (confirm("Revoke this key?")) upd(id, { status: "revoked" }); return; }
+  if (a === "exp") { const v = card.querySelector(".ex").value; return upd(id, { expires_at: v ? new Date(v + "T23:59:59").toISOString() : null }); }
+  if (a === "own") {
+    const n = prompt("Owner name", l.owner_name || ""); if (n === null) return;
+    const c = prompt("Owner contact", l.owner_contact || ""); if (c === null) return;
+    return upd(id, { owner_name: n.trim().slice(0,100) || null, owner_contact: c.trim().slice(0,100) || null });
+  }
+  if (a === "del" && confirm("Permanently delete this key? This cannot be undone.")) {
+    const { error } = await sb.from("licenses").delete().eq("id", id);
+    if (error) return say("Delete failed: " + error.message, true);
+    say("Deleted."); loadKeys();
+  }
+});
+
+$("gb").addEventListener("click", async () => {
+  const n = parseInt($("gc").value, 10);
+  if (!(n >= 1 && n <= 50)) return say("Enter a number from 1 to 50.", true);
+  const ex = $("ge").value;
+  $("gb").disabled = true;
+  const { data, error } = await sb.rpc("generate_license_keys", {
+    p_count: n, p_owner: $("go").value.trim(), p_contact: $("gt").value.trim(),
+    p_expires: ex ? new Date(ex + "T23:59:59").toISOString() : null, p_note: $("gn").value.trim()
+  });
+  $("gb").disabled = false;
+  if (error) return say("Generate failed: " + error.message, true);
+  $("newKeys").innerHTML = "<b>New keys:</b><br>" + data.map(k => esc(k.license_key)).join("<br>");
+  say(data.length + " key(s) created.");
+});
+
+async function loadLogs(){
+  const { data, error } = await sb.from("verification_logs").select("*").order("created_at", { ascending:false }).limit(200);
+  if (error) return say("Could not load history: " + error.message, true);
+  $("logs").innerHTML = data.length ? data.map(r => `<div class="k"><b>****-${esc(r.key_tail)}</b><span class="b ${r.result === "valid" ? "active" : r.result === "expired" ? "expired" : "revoked"}">${esc(r.result)}</span>
+    <div class="m">${esc(new Date(r.created_at).toLocaleString())} | IP ${esc(r.ip)}</div></div>`).join("") : '<div class="m">No verification attempts yet.</div>';
+}
+
+if (sb) { sb.auth.onAuthStateChange((ev) => { if (ev === "SIGNED_OUT") show(false); }); start(); }
+</script>
+</body>
+</html>
